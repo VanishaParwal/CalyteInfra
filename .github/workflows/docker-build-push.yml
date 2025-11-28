@@ -1,0 +1,39 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Login to Docker Registry
+      uses: docker/login-action@v2
+      with:
+        registry: ${{ secrets.REGISTRY_URL }}
+        username: ${{ secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+
+    - name: Build and push
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: true
+        tags: |
+          ${{ secrets.REGISTRY_URL }}/calyte:latest
+          ${{ secrets.REGISTRY_URL }}/calyte:${{ github.sha }}
+        cache-from: type=registry,ref=${{ secrets.REGISTRY_URL }}/calyte:buildcache
+        cache-to: type=registry,ref=${{ secrets.REGISTRY_URL }}/calyte:buildcache,mode=max
+
+    - name: Image digest
+      run: echo ${{ steps.docker_build.outputs.digest }}

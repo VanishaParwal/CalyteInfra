@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: calyte-service
+  namespace: default
+  labels:
+    app: calyte
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 5000
+    protocol: TCP
+    name: http
+  selector:
+    app: calyte
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600

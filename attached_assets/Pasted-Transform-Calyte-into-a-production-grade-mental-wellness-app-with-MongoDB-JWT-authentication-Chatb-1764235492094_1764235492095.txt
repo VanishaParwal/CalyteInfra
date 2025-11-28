@@ -1,0 +1,21 @@
+Transform Calyte into a production-grade mental wellness app with MongoDB, JWT authentication, Chatbase AI therapy chatbot, functional audio playback, complete DevOps infrastructure (Docker, CI/CD with SonarQube, CodeQL, Trivy), and microservices-ready architecture with India-focused mock data
+I'll include the following features:
+
+Migrate backend from in-memory storage to MongoDB with Mongoose ODM for all data persistence (users, assessments, goals, chat messages, sessions, playlists)
+Implement JWT-based authentication system with access tokens, refresh tokens, and secure HTTP-only cookies
+Integrate Chatbase AI chatbot API (agent ID: 6aWohxDZKFG3KTXT_tO5S) for therapy chat while preserving speech-to-text functionality
+Fix audio playback in playlist.tsx with proper audio source handling to play MP3 files through laptop speakers
+Build production-grade backend with layered architecture: controllers, services, repositories, DTOs, and middleware
+Create comprehensive DevOps infrastructure: multi-stage Dockerfile, Docker Compose with MongoDB service
+Set up complete GitHub Actions CI/CD pipeline with build, test, code quality, security scanning, and deployment stages
+Integrate SonarQube quality gate with provided token (61a5ee9c5b431b4fa50f9704f27a043467234823) for code quality analysis
+Add CodeQL security scanning workflow for automated vulnerability detection
+Implement Trivy container scanner in CI/CD for Docker image security analysis
+Design microservices-ready hexagonal architecture with clear service boundaries (AuthService, UserService, TherapyService, PlaylistService, MoodTrackingService)
+Add comprehensive API Gateway preparation: health checks (/health, /ready), metrics endpoints, request validation middleware
+Populate rich India-focused mock data: Indian cities, Hindi/regional meditation terms, Indian therapists, Bollywood-inspired playlists, cultural wellness practices
+Implement production logging with Winston: structured JSON logs, log rotation, different log levels per environment
+Create robust environment configuration with Joi validation for all required environment variables
+Generate interactive Swagger/OpenAPI documentation accessible at /api-docs endpoint
+Add comprehensive error handling: custom error classes, global error middleware, API response standardization
+Implement security best practices: helmet for headers, CORS configuration, rate limiting, input sanitization, SQL injection prevention
