@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@main
 
       - name: Run IaC scan
-        uses: accuknox/iac-scan-action@latest
+        uses: accuknox/iac-scan-action@VanishaParwal/iac-scan-action
         with:
           directory: "."                            # Optional: Directory to scan
           compact: true                             # Optional: Minimise output
