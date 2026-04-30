@@ -32,7 +32,7 @@ jobs:
           sonar_org_id: "vanishaparwal123"
           sonar_token: "0f45159c6e9af5a4e2c6748c481ec1ff21aee639"
           sonar_host_url: "https://sonarcloud.io"
-          accuknox_endpoint: "cspm.demo.accuknox.com"
-          accuknox_label: "testp"
+          accuknox_endpoint: "cspm.stage.accuknox.com"
+          accuknox_label: "sonartest"
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
           soft_fail: false
