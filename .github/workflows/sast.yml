@@ -1,1 +1,38 @@
+name: AccuKnox Opengrep SAST
 
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  accuknox-cicd:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Debug repo metadata
+        run: |
+          echo "GITHUB_REPOSITORY=${GITHUB_REPOSITORY}"
+          echo "GITHUB_SERVER_URL=${GITHUB_SERVER_URL}"
+          git rev-parse --is-inside-work-tree || true
+          git remote -v || true
+          echo "origin.url=$(git config --get remote.origin.url || echo '<empty>')"
+
+      - name: "Run AccuKnox SAST: Opengrep"
+        uses: ./.github/actions
+        with:
+          skip_sonar_scan: false
+          sonar_project_key: "ishaanj18_use-cases"
+          sonar_org_id: "ishaanj18"
+          sonar_token: "dcdee7a7668feabcf1ad6d74cb707ce1b136d18e"
+          sonar_host_url: "https://sonarcloud.io"
+          accuknox_endpoint: "cspm.demo.accuknox.com"
+          accuknox_label: "ptest"
+          accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
+          soft_fail: false
