@@ -28,5 +28,5 @@ jobs:
           soft_fail: true
           upload_results: true  # (Optional) set true if you want to upload result to Github artefact
           generate_sbom: false  # (Optional) set true to generate SBOM
-          project_name: ""      # (Optional) must match the project name created in the dashboard
+          project_name: "v-test"      # (Optional) must match the project name created in the dashboard
           dockerfile_context: Dockerfile  # Path to Dockerfile for building image before scan 
