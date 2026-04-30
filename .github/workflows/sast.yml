@@ -25,7 +25,7 @@ jobs:
           echo "origin.url=$(git config --get remote.origin.url || echo '<empty>')"
 
       - name: "Run AccuKnox SAST: Opengrep"
-        uses: ./.github/actions
+        uses: ./.github
         with:
           skip_sonar_scan: false
           sonar_project_key: "VanishaParwal_CalyteInfra"
