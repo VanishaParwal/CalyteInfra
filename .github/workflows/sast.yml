@@ -28,11 +28,11 @@ jobs:
         uses: ./.github/actions
         with:
           skip_sonar_scan: false
-          sonar_project_key: "ishaanj18_use-cases"
-          sonar_org_id: "ishaanj18"
-          sonar_token: "dcdee7a7668feabcf1ad6d74cb707ce1b136d18e"
+          sonar_project_key: "VanishaParwal_CalyteInfra"
+          sonar_org_id: "vanishaparwal123"
+          sonar_token: "0f45159c6e9af5a4e2c6748c481ec1ff21aee639"
           sonar_host_url: "https://sonarcloud.io"
           accuknox_endpoint: "cspm.demo.accuknox.com"
-          accuknox_label: "ptest"
+          accuknox_label: "testp"
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
           soft_fail: false
