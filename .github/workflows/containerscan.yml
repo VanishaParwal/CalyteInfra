@@ -27,6 +27,6 @@ jobs:
           severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
           soft_fail: true
           upload_results: true  # (Optional) set true if you want to upload result to Github artefact
-          generate_sbom: false  # (Optional) set true to generate SBOM
+          generate_sbom: true  # (Optional) set true to generate SBOM
           project_name: "v-test"      # (Optional) must match the project name created in the dashboard
           dockerfile_context: Dockerfile  # Path to Dockerfile for building image before scan 
