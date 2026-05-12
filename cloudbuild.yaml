@@ -50,13 +50,13 @@ steps:
   args:
     - '-c'
     - |
-      TOKEN=$(cat /workspace/decrypted-data.txt)
+      TOKEN=$$(cat /workspace/decrypted-data.txt)
 
       echo "Uploading report to AccuKnox SaaS..."
 
       curl -v --location --request POST \
       "https://${_CSPM_URL}/api/v1/artifact/?label=${_LABEL}&data_type=TR&save_to_s3=false" \
-      --header "Authorization: Bearer ${TOKEN}" \
+      --header "Authorization: Bearer $${TOKEN}" \
       --header "Content-Type: multipart/form-data" \
       --form "file=@/workspace/accuknox-report.json"
   waitFor:
