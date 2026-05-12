@@ -1,113 +1,114 @@
 steps:
 
-# Step 1: Pull NGINX Image
+# Step 1: Pull Sample Image
 - name: 'gcr.io/cloud-builders/docker'
   id: 'pull-image'
   args:
     - 'pull'
     - 'nginx:latest'
 
-# Step 2: Tag Image for Local Scan
-- name: 'gcr.io/cloud-builders/docker'
-  id: 'tag-image'
+# Step 2: Run AccuKnox Container Scan
+- name: 'accuknox/accuknox-container-scan'
+  id: 'accuknox-container-scan'
   args:
-    - 'tag'
+    - 'image'
+    - '--format'
+    - 'json'
+    - '--output'
+    - '/workspace/accuknox-report.json'
     - 'nginx:latest'
-    - 'gcr.io/shaped-infusion-402417/nginx:latest'
 
-# Step 3: Download AccuKnox ASPM Scanner
-- name: 'ubuntu'
-  id: 'download-scanner'
-  entrypoint: 'bash'
+# Step 3: Upload Report to GCS
+- name: 'gcr.io/cloud-builders/gsutil'
+  id: 'upload-report'
   args:
-    - '-c'
-    - |
-      apt-get update && apt-get install -y curl
-      curl -L https://github.com/accuknox/aspm-scanner-cli/releases/download/v0.14.0/accuknox-aspm-scanner -o /workspace/accuknox-aspm-scanner
-      chmod +x /workspace/accuknox-aspm-scanner
-
-# Step 4: Install Container Scanner
-- name: 'ubuntu'
-  id: 'install-container-tool'
-  entrypoint: 'bash'
-  args:
-    - '-c'
-    - |
-      /workspace/accuknox-aspm-scanner tool install --type container
+    - 'cp'
+    - '/workspace/accuknox-report.json'
+    - 'gs://artifacts.shaped-infusion-402417.appspot.com/security-reports/accuknox-report.json'
   waitFor:
-    - 'download-scanner'
+    - 'accuknox-container-scan'
 
-# Step 5: Access AccuKnox Token from Secret Manager
+# Step 4: Print Report
+- name: 'ubuntu'
+  id: 'print-report'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      cat /workspace/accuknox-report.json
+  waitFor:
+    - 'accuknox-container-scan'
+
+# Step 5: Read AccuKnox Token Secret
 - name: 'gcr.io/cloud-builders/gcloud'
-  id: 'access-secret'
+  id: 'access-token-secret'
   entrypoint: 'bash'
   args:
     - '-c'
     - |
       gcloud secrets versions access latest \
-      --secret=${_SECRET_NAME} \
+      --secret=accuknox_token \
       --format='get(payload.data)' | tr '_-' '/+' | base64 -d > /workspace/accuknox-token.txt
 
-# Step 6: Run Vulnerability Scan
-- name: 'ubuntu'
-  id: 'accuknox-container-scan'
+# Step 6: Read AccuKnox Endpoint Secret
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: 'access-endpoint-secret'
   entrypoint: 'bash'
   args:
     - '-c'
     - |
-      export ACCUKNOX_TOKEN=$(cat /workspace/accuknox-token.txt)
+      gcloud secrets versions access latest \
+      --secret=accuknox_endpoint \
+      --format='get(payload.data)' | tr '_-' '/+' | base64 -d > /workspace/accuknox-endpoint.txt
 
-      /workspace/accuknox-aspm-scanner scan \
-        --softfail \
-        --keep-results \
-        container \
-        --command "image gcr.io/shaped-infusion-402417/nginx:latest --severity HIGH,CRITICAL" \
-        --container-mode
-
-      cp results.json /workspace/results-vuln.json
-  waitFor:
-    - 'install-container-tool'
-    - 'access-secret'
-
-# Step 7: Upload Results to GCS
-- name: 'gcr.io/cloud-builders/gsutil'
-  id: 'upload-to-gcs'
+# Step 7: Read AccuKnox Label Secret
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: 'access-label-secret'
+  entrypoint: 'bash'
   args:
-    - 'cp'
-    - '/workspace/results-vuln.json'
-    - 'gs://artifacts.shaped-infusion-402417.appspot.com/security-reports/results-vuln.json'
+    - '-c'
+    - |
+      gcloud secrets versions access latest \
+      --secret=accuknox_label \
+      --format='get(payload.data)' | tr '_-' '/+' | base64 -d > /workspace/accuknox-label.txt
+
+# Step 8: Upload Scan Result to AccuKnox SaaS
+- name: 'gcr.io/cloud-builders/curl'
+  id: 'forward-result-to-accuknox'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      TOKEN=$(cat /workspace/accuknox-token.txt)
+      ENDPOINT=$(cat /workspace/accuknox-endpoint.txt)
+      LABEL=$(cat /workspace/accuknox-label.txt)
+
+      curl --location --request POST \
+      "https://${ENDPOINT}/api/v1/artifact/?label=${LABEL}&data_type=TR&save_to_s3=false" \
+      --header "Authorization: Bearer ${TOKEN}" \
+      --form "file=@/workspace/accuknox-report.json"
   waitFor:
+    - 'access-token-secret'
+    - 'access-endpoint-secret'
+    - 'access-label-secret'
     - 'accuknox-container-scan'
 
-# Step 8: Print Scan Results
-- name: 'ubuntu'
-  id: 'print-results'
-  entrypoint: 'bash'
-  args:
-    - '-c'
-    - |
-      cat /workspace/results-vuln.json
-  waitFor:
-    - 'upload-to-gcs'
-
-# Step 9: Block Deployment on Critical Vulnerabilities
+# Step 9: Fail Pipeline on Critical Vulnerabilities
 - name: 'ubuntu'
   id: 'policy-check'
   entrypoint: 'bash'
   args:
     - '-c'
     - |
-      if grep -q '"severity":"CRITICAL"' /workspace/results-vuln.json; then
+      if grep -q "CRITICAL" /workspace/accuknox-report.json; then
         echo "CRITICAL vulnerabilities detected."
+        echo "Deployment halted."
         exit 1
       else
-        echo "No critical vulnerabilities found."
+        echo "No CRITICAL vulnerabilities found."
       fi
   waitFor:
-    - 'print-results'
-
-substitutions:
-  _SECRET_NAME: 'accuknox_token'
+    - 'forward-result-to-accuknox'
 
 options:
   logging: CLOUD_LOGGING_ONLY
