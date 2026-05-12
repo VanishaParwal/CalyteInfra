@@ -1,89 +1,82 @@
 steps:
-  # Step 1: Clone the GitHub repository
-  - name: 'gcr.io/cloud-builders/git'
-    entrypoint: 'bash'
+  # Step 1: Scan the container image with AccuKnox and save the report
+  - name: 'accuknox/accuknox-container-scan'
     args:
-      - '-c'
-      - |
-        git clone https://github.com/{user-name}/{repo-name}.git /workspace/AccuKnox_Iac
+      - 'image'
+      - '--format'
+      - 'json'
+      - '--output'
+      - '/workspace/accuknox-report.json'
+      - '${_IMAGE_URL}:${_IMAGE_TAG}'
+    id: 'accuknox-container-scan'
 
-  # Step 2: Fetch secrets from GCP Secret Manager
+  # Step 2: Upload the AccuKnox report to Cloud Storage
+  - name: 'gcr.io/cloud-builders/gsutil'
+    args:
+      - 'cp'
+      - '/workspace/accuknox-report.json'
+      - 'gs://BUCKET_NAME/accuknox-report.json'
+    waitFor:
+      - 'accuknox-container-scan'
+
+  # Step 3: Print the AccuKnox container scan results
+  - name: 'ubuntu'
+    entrypoint: 'cat'
+    args:
+      - '/workspace/accuknox-report.json'
+    waitFor:
+      - 'accuknox-container-scan'
+
+  # Step 4: Access the secret using gcloud and save it to a file
   - name: 'gcr.io/cloud-builders/gcloud'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        gcloud secrets versions access latest --secret=ACCUKNOX_TOKEN \
-          --format='get(payload.data)' | tr '_-' '/+' | base64 -d \
-          > /workspace/accuknox_token.txt
+        gcloud secrets versions access latest --secret=accuknox_token --format='get(payload.data)' | tr '_-' '/+' | base64 -d > /workspace/ak-token.txt
+    id: 'access-secret'
 
-        gcloud secrets versions access latest --secret=ACCUKNOX_LABEL \
-          --format='get(payload.data)' | tr '_-' '/+' | base64 -d \
-          > /workspace/accuknox_label.txt
-
-        gcloud secrets versions access latest --secret=ACCUKNOX_ENDPOINT \
-          --format='get(payload.data)' | tr '_-' '/+' | base64 -d \
-          > /workspace/accuknox_endpoint.txt
-
-  # Step 3: Download accuknox-aspm-scanner, run IaC scan and upload to AccuKnox SaaS
-  - name: 'ubuntu'
+  # Step 5: Forward the logs to the SaaS platform using curl
+  - name: 'gcr.io/cloud-builders/curl'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        # Load secrets from files written in Step 2
-        ACCUKNOX_TOKEN=$(cat /workspace/accuknox_token.txt)
-        ACCUKNOX_LABEL=$(cat /workspace/accuknox_label.txt)
-        ACCUKNOX_ENDPOINT=$(cat /workspace/accuknox_endpoint.txt)
+        HTTP_STATUS=$(curl --location \
+          "https://${_CSPM_URL}/api/v1/artifact/?data_type=TR&save_to_s3=True" \
+          --header "Authorization: Bearer $(cat /workspace/ak-token.txt)" \
+          --form "file=@/workspace/accuknox-report.json" \
+          --output /tmp/ak_response.json \
+          --write-out "%{http_code}" \
+          --insecure)
 
-        # Validate that all required secrets are present
-        if [ -z "$ACCUKNOX_TOKEN" ] || [ -z "$ACCUKNOX_LABEL" ] || [ -z "$ACCUKNOX_ENDPOINT" ]; then
-          echo "ERROR: ACCUKNOX_TOKEN, ACCUKNOX_LABEL, and ACCUKNOX_ENDPOINT must be set!"
+        echo "Upload Status: ${HTTP_STATUS}"
+        cat /tmp/ak_response.json
+
+        if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+          echo "Upload failed (HTTP ${HTTP_STATUS})"
           exit 1
         fi
+    waitFor:
+      - 'access-secret'
+    id: 'forward-result-to-accuknox-saas'
 
-        # Install curl if not present
-        apt-get update -qq && apt-get install -y -qq curl
+  # Step 6: If there are critical vulnerabilities, stop deployment
+  - name: 'bash'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if grep -q "CRITICAL" /workspace/accuknox-report.json; then
+          echo "AccuKnox Scan has halted the deployment because it detected critical vulnerabilities"
+          exit 1
+        else
+          exit 0
+        fi
+    waitFor:
+      - 'forward-result-to-accuknox-saas'
 
-        # Download the AccuKnox ASPM Scanner CLI
-        echo "Downloading AccuKnox ASPM Scanner..."
-        curl -L https://github.com/accuknox/aspm-scanner-cli/releases/download/v0.13.4/accuknox-aspm-scanner \
-          -o /workspace/accuknox-aspm-scanner
-        chmod +x /workspace/accuknox-aspm-scanner
-
-        # Build optional scan arguments
-        CMD_ARGS=""
-        [ -n "${_FILE}" ]      && CMD_ARGS="$CMD_ARGS --file ${_FILE}"
-        [ -n "${_DIRECTORY}" ] && CMD_ARGS="$CMD_ARGS --directory ${_DIRECTORY}"
-        [ "${_COMPACT}" = "true" ] && CMD_ARGS="$CMD_ARGS --compact"
-        [ "${_QUIET}"   = "true" ] && CMD_ARGS="$CMD_ARGS --quiet"
-        [ -n "${_FRAMEWORK}" ] && CMD_ARGS="$CMD_ARGS --framework ${_FRAMEWORK}"
-
-        SOFT_FAIL_ARG=""
-        [ "${_SOFT_FAIL}" = "true" ] && SOFT_FAIL_ARG="--softfail"
-
-        # Run the IaC scan — scanner handles upload to AccuKnox SaaS internally
-        echo "Running AccuKnox IaC scan..."
-        /workspace/accuknox-aspm-scanner scan $SOFT_FAIL_ARG iac \
-          --command "$CMD_ARGS" \
-          --container-mode \
-          --repo-url   "https://github.com/{user-name}/{repo-name}.git" \
-          --repo-branch "${_BRANCH}" \
-          --endpoint "$ACCUKNOX_ENDPOINT" \
-          --label    "$ACCUKNOX_LABEL" \
-          --token    "$ACCUKNOX_TOKEN"
-
-# Store build logs
-logsBucket: 'gs://{bucket-name}'
-
-# Substitutions — safe defaults, override per trigger/manual run as needed
 substitutions:
-  _DIRECTORY: '/workspace/AccuKnox_Iac'   # Directory to scan (maps to --directory)
-  _FILE: ''                                # Specific file to scan (maps to --file); leave empty to scan directory
-  _COMPACT: 'true'                         # Suppress code blocks in output
-  _QUIET: 'true'                           # Show only failed checks
-  _SOFT_FAIL: 'false'                      # Set true to avoid non-zero exit on findings
-  _FRAMEWORK: ''                           # e.g. terraform, kubernetes — leave empty for all
-  _BRANCH: 'main'                          # Repository branch being scanned
-
-timeout: '1200s'  # 20 minutes
+  _IMAGE_URL: 'gcr.io/PROJECT_ID/IMAGE_NAME'
+  _IMAGE_TAG: 'latest'
+  _CSPM_URL: 'cspm.demo.accuknox.com'
