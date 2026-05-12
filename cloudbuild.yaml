@@ -14,7 +14,7 @@ steps:
       ]
 
   # =========================
-  # 2. Install Scanner
+  # 2. Install AccuKnox Scanner
   # =========================
   - name: 'ubuntu'
     id: 'scanner-install'
@@ -22,13 +22,15 @@ steps:
     args:
       - '-c'
       - |
+        set -e
+
         apt-get update && apt-get install -y curl
 
         curl -L https://github.com/accuknox/aspm-scanner-cli/releases/download/v0.14.0/accuknox-aspm-scanner \
-          -o scanner
+          -o /workspace/scanner
 
-        chmod +x scanner
-        ./scanner tool install --type container
+        chmod +x /workspace/scanner
+        /workspace/scanner tool install --type container
 
   # =========================
   # 3. Fetch Secrets
@@ -39,9 +41,11 @@ steps:
     args:
       - '-c'
       - |
-        gcloud secrets versions access latest --secret=accuknox_token > token.txt
-        gcloud secrets versions access latest --secret=accuknox_endpoint > endpoint.txt
-        gcloud secrets versions access latest --secret=accuknox_label > label.txt
+        set -e
+
+        gcloud secrets versions access latest --secret=accuknox_token > /workspace/token.txt
+        gcloud secrets versions access latest --secret=accuknox_endpoint > /workspace/endpoint.txt
+        gcloud secrets versions access latest --secret=accuknox_label > /workspace/label.txt
 
   # =========================
   # 4. Scan Image
@@ -54,24 +58,20 @@ steps:
       - |
         set -e
 
-        export accuknox_token=$(cat token.txt)
-        export accuknox_endpoint=$(cat endpoint.txt)
-        export accuknox_label=$(cat label.txt)
-
         IMAGE="us-central1-docker.pkg.dev/shaped-infusion-402417/app-repo/my-app:latest"
 
         echo "Scanning $IMAGE"
 
-        ./scanner scan \
+        /workspace/scanner scan \
           container \
           --command "image $IMAGE --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL" \
           --container-mode \
           --keep-results
 
-        cp results.json results.json
+        cp results.json /workspace/results.json
 
   # =========================
-  # 5. Upload to AccuKnox SaaS
+  # 5. Upload to AccuKnox SaaS (FIXED)
   # =========================
   - name: 'ubuntu'
     id: 'upload-accuknox'
@@ -81,15 +81,19 @@ steps:
       - |
         set -e
 
+        TOKEN=$(cat /workspace/token.txt)
+        ENDPOINT=$(cat /workspace/endpoint.txt)
+        LABEL=$(cat /workspace/label.txt)
+
         echo "Uploading results to AccuKnox SaaS..."
 
-        curl --location --request POST "$(/bin/cat endpoint.txt)/api/v1/artifact/" \
-          --header "Authorization: Bearer $(cat token.txt)" \
-          --header "Label: $(cat label.txt)" \
-          --form "file=@results.json"
+        curl --location --request POST "$ENDPOINT/api/v1/artifact/" \
+          --header "Authorization: Bearer $TOKEN" \
+          --header "Label: $LABEL" \
+          --form "file=@/workspace/results.json"
 
   # =========================
-  # 6. Fail on CRITICAL
+  # 6. Security Gate
   # =========================
   - name: 'ubuntu'
     id: 'gate'
@@ -97,7 +101,7 @@ steps:
     args:
       - '-c'
       - |
-        if grep -q "CRITICAL" results.json; then
+        if grep -q "CRITICAL" /workspace/results.json; then
           echo "❌ CRITICAL vulnerabilities found - blocking build"
           exit 1
         fi
