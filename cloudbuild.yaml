@@ -1,110 +1,113 @@
 steps:
 
-  # =========================
-  # 1. Build Docker Image
-  # =========================
-  - name: 'gcr.io/cloud-builders/docker'
-    id: 'build'
-    args:
-      [
-        'build',
-        '-t',
-        'us-central1-docker.pkg.dev/shaped-infusion-402417/app-repo/my-app:latest',
-        '.'
-      ]
+# Step 1: Pull NGINX Image
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'pull-image'
+  args:
+    - 'pull'
+    - 'nginx:latest'
 
-  # =========================
-  # 2. Install AccuKnox Scanner
-  # =========================
-  - name: 'ubuntu'
-    id: 'scanner-install'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        set -e
+# Step 2: Tag Image for Local Scan
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'tag-image'
+  args:
+    - 'tag'
+    - 'nginx:latest'
+    - 'gcr.io/shaped-infusion-402417/nginx:latest'
 
-        apt-get update && apt-get install -y curl
+# Step 3: Download AccuKnox ASPM Scanner
+- name: 'ubuntu'
+  id: 'download-scanner'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      apt-get update && apt-get install -y curl
+      curl -L https://github.com/accuknox/aspm-scanner-cli/releases/download/v0.14.0/accuknox-aspm-scanner -o /workspace/accuknox-aspm-scanner
+      chmod +x /workspace/accuknox-aspm-scanner
 
-        curl -L https://github.com/accuknox/aspm-scanner-cli/releases/download/v0.14.0/accuknox-aspm-scanner \
-          -o /workspace/scanner
+# Step 4: Install Container Scanner
+- name: 'ubuntu'
+  id: 'install-container-tool'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      /workspace/accuknox-aspm-scanner tool install --type container
+  waitFor:
+    - 'download-scanner'
 
-        chmod +x /workspace/scanner
-        /workspace/scanner tool install --type container
+# Step 5: Access AccuKnox Token from Secret Manager
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: 'access-secret'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      gcloud secrets versions access latest \
+      --secret=${_SECRET_NAME} \
+      --format='get(payload.data)' | tr '_-' '/+' | base64 -d > /workspace/accuknox-token.txt
 
-  # =========================
-  # 3. Fetch Secrets
-  # =========================
-  - name: 'gcr.io/cloud-builders/gcloud'
-    id: 'secrets'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        set -e
+# Step 6: Run Vulnerability Scan
+- name: 'ubuntu'
+  id: 'accuknox-container-scan'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      export ACCUKNOX_TOKEN=$(cat /workspace/accuknox-token.txt)
 
-        gcloud secrets versions access latest --secret=accuknox_token > /workspace/token.txt
-        gcloud secrets versions access latest --secret=accuknox_endpoint > /workspace/endpoint.txt
-        gcloud secrets versions access latest --secret=accuknox_label > /workspace/label.txt
+      /workspace/accuknox-aspm-scanner scan \
+        --softfail \
+        --keep-results \
+        container \
+        --command "image gcr.io/shaped-infusion-402417/nginx:latest --severity HIGH,CRITICAL" \
+        --container-mode
 
-  # =========================
-  # 4. Scan Image
-  # =========================
-  - name: 'ubuntu'
-    id: 'scan'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        set -e
+      cp results.json /workspace/results-vuln.json
+  waitFor:
+    - 'install-container-tool'
+    - 'access-secret'
 
-        IMAGE="us-central1-docker.pkg.dev/shaped-infusion-402417/app-repo/my-app:latest"
+# Step 7: Upload Results to GCS
+- name: 'gcr.io/cloud-builders/gsutil'
+  id: 'upload-to-gcs'
+  args:
+    - 'cp'
+    - '/workspace/results-vuln.json'
+    - 'gs://artifacts.shaped-infusion-402417.appspot.com/security-reports/results-vuln.json'
+  waitFor:
+    - 'accuknox-container-scan'
 
-        echo "Scanning $IMAGE"
+# Step 8: Print Scan Results
+- name: 'ubuntu'
+  id: 'print-results'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      cat /workspace/results-vuln.json
+  waitFor:
+    - 'upload-to-gcs'
 
-        /workspace/scanner scan \
-          container \
-          --command "image $IMAGE --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL" \
-          --container-mode \
-          --keep-results
+# Step 9: Block Deployment on Critical Vulnerabilities
+- name: 'ubuntu'
+  id: 'policy-check'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      if grep -q '"severity":"CRITICAL"' /workspace/results-vuln.json; then
+        echo "CRITICAL vulnerabilities detected."
+        exit 1
+      else
+        echo "No critical vulnerabilities found."
+      fi
+  waitFor:
+    - 'print-results'
 
-        cp results.json /workspace/results.json
-
-  # =========================
-  # 5. Upload to AccuKnox SaaS (FIXED)
-  # =========================
-  - name: 'ubuntu'
-    id: 'upload-accuknox'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        set -e
-
-        TOKEN=$(cat /workspace/token.txt)
-        ENDPOINT=$(cat /workspace/endpoint.txt)
-        LABEL=$(cat /workspace/label.txt)
-
-        echo "Uploading results to AccuKnox SaaS..."
-
-        curl --location --request POST "$ENDPOINT/api/v1/artifact/" \
-          --header "Authorization: Bearer $TOKEN" \
-          --header "Label: $LABEL" \
-          --form "file=@/workspace/results.json"
-
-  # =========================
-  # 6. Security Gate
-  # =========================
-  - name: 'ubuntu'
-    id: 'gate'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        if grep -q "CRITICAL" /workspace/results.json; then
-          echo "❌ CRITICAL vulnerabilities found - blocking build"
-          exit 1
-        fi
+substitutions:
+  _SECRET_NAME: 'accuknox_token'
 
 options:
   logging: CLOUD_LOGGING_ONLY
