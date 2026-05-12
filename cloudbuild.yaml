@@ -1,124 +1,89 @@
 steps:
+  # Step 1: Clone the GitHub repository
+  - name: 'gcr.io/cloud-builders/git'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        git clone https://github.com/{user-name}/{repo-name}.git /workspace/AccuKnox_Iac
 
-# Step 1: Clone GitHub Repository
-- name: 'gcr.io/cloud-builders/git'
-  id: 'clone-repository'
-  entrypoint: 'bash'
-  args:
-    - '-c'
-    - |
-      git clone https://github.com/VanishaParwal/CalyteInfra.git /workspace/AccuKnox_Iac
+  # Step 2: Fetch secrets from GCP Secret Manager
+  - name: 'gcr.io/cloud-builders/gcloud'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud secrets versions access latest --secret=ACCUKNOX_TOKEN \
+          --format='get(payload.data)' | tr '_-' '/+' | base64 -d \
+          > /workspace/accuknox_token.txt
 
-# Step 2: Run Checkov IaC Scan
-- name: 'python:3.11'
-  id: 'run-checkov-scan'
-  entrypoint: 'bash'
-  args:
-    - '-c'
-    - |
-      pip install checkov
+        gcloud secrets versions access latest --secret=ACCUKNOX_LABEL \
+          --format='get(payload.data)' | tr '_-' '/+' | base64 -d \
+          > /workspace/accuknox_label.txt
 
-      checkov -d /workspace/AccuKnox_Iac \
-      --output json > /workspace/checkov_report.json || true
+        gcloud secrets versions access latest --secret=ACCUKNOX_ENDPOINT \
+          --format='get(payload.data)' | tr '_-' '/+' | base64 -d \
+          > /workspace/accuknox_endpoint.txt
 
-      echo "===== Checkov Report Generated ====="
+  # Step 3: Download accuknox-aspm-scanner, run IaC scan and upload to AccuKnox SaaS
+  - name: 'ubuntu'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # Load secrets from files written in Step 2
+        ACCUKNOX_TOKEN=$(cat /workspace/accuknox_token.txt)
+        ACCUKNOX_LABEL=$(cat /workspace/accuknox_label.txt)
+        ACCUKNOX_ENDPOINT=$(cat /workspace/accuknox_endpoint.txt)
 
-      ls -lah /workspace/
+        # Validate that all required secrets are present
+        if [ -z "$ACCUKNOX_TOKEN" ] || [ -z "$ACCUKNOX_LABEL" ] || [ -z "$ACCUKNOX_ENDPOINT" ]; then
+          echo "ERROR: ACCUKNOX_TOKEN, ACCUKNOX_LABEL, and ACCUKNOX_ENDPOINT must be set!"
+          exit 1
+        fi
 
-# Step 3: Read AccuKnox Token Secret
-- name: 'gcr.io/cloud-builders/gcloud'
-  id: 'access-token-secret'
-  entrypoint: 'bash'
-  args:
-    - '-c'
-    - |
-      gcloud secrets versions access latest \
-      --secret=accuknox_token \
-      > /workspace/accuknox-token.txt
+        # Install curl if not present
+        apt-get update -qq && apt-get install -y -qq curl
 
-# Step 4: Read AccuKnox Endpoint Secret
-- name: 'gcr.io/cloud-builders/gcloud'
-  id: 'access-endpoint-secret'
-  entrypoint: 'bash'
-  args:
-    - '-c'
-    - |
-      gcloud secrets versions access latest \
-      --secret=accuknox_endpoint \
-      > /workspace/accuknox-endpoint.txt
+        # Download the AccuKnox ASPM Scanner CLI
+        echo "Downloading AccuKnox ASPM Scanner..."
+        curl -L https://github.com/accuknox/aspm-scanner-cli/releases/download/v0.13.4/accuknox-aspm-scanner \
+          -o /workspace/accuknox-aspm-scanner
+        chmod +x /workspace/accuknox-aspm-scanner
 
-# Step 5: Read AccuKnox Label Secret
-- name: 'gcr.io/cloud-builders/gcloud'
-  id: 'access-label-secret'
-  entrypoint: 'bash'
-  args:
-    - '-c'
-    - |
-      gcloud secrets versions access latest \
-      --secret=accuknox_label \
-      > /workspace/accuknox-label.txt
+        # Build optional scan arguments
+        CMD_ARGS=""
+        [ -n "${_FILE}" ]      && CMD_ARGS="$CMD_ARGS --file ${_FILE}"
+        [ -n "${_DIRECTORY}" ] && CMD_ARGS="$CMD_ARGS --directory ${_DIRECTORY}"
+        [ "${_COMPACT}" = "true" ] && CMD_ARGS="$CMD_ARGS --compact"
+        [ "${_QUIET}"   = "true" ] && CMD_ARGS="$CMD_ARGS --quiet"
+        [ -n "${_FRAMEWORK}" ] && CMD_ARGS="$CMD_ARGS --framework ${_FRAMEWORK}"
 
-# Step 6: Enrich Report
-- name: 'ubuntu'
-  id: 'enrich-report'
-  entrypoint: 'bash'
-  args:
-    - '-c'
-    - |
-      apt-get update
+        SOFT_FAIL_ARG=""
+        [ "${_SOFT_FAIL}" = "true" ] && SOFT_FAIL_ARG="--softfail"
 
-      apt-get install -y jq
+        # Run the IaC scan — scanner handles upload to AccuKnox SaaS internally
+        echo "Running AccuKnox IaC scan..."
+        /workspace/accuknox-aspm-scanner scan $SOFT_FAIL_ARG iac \
+          --command "$CMD_ARGS" \
+          --container-mode \
+          --repo-url   "https://github.com/{user-name}/{repo-name}.git" \
+          --repo-branch "${_BRANCH}" \
+          --endpoint "$ACCUKNOX_ENDPOINT" \
+          --label    "$ACCUKNOX_LABEL" \
+          --token    "$ACCUKNOX_TOKEN"
 
-      jq --arg repoLink "https://github.com/VanishaParwal/CalyteInfra.git" \
-         --arg branch "main" \
-         '. += [{"details": {"repo": $repoLink, "branch": $branch}}]' \
-         /workspace/checkov_report.json \
-         > /workspace/tmp.json
+# Store build logs
+logsBucket: 'gs://{bucket-name}'
 
-      mv /workspace/tmp.json /workspace/checkov_report.json
+# Substitutions — safe defaults, override per trigger/manual run as needed
+substitutions:
+  _DIRECTORY: '/workspace/AccuKnox_Iac'   # Directory to scan (maps to --directory)
+  _FILE: ''                                # Specific file to scan (maps to --file); leave empty to scan directory
+  _COMPACT: 'true'                         # Suppress code blocks in output
+  _QUIET: 'true'                           # Show only failed checks
+  _SOFT_FAIL: 'false'                      # Set true to avoid non-zero exit on findings
+  _FRAMEWORK: ''                           # e.g. terraform, kubernetes — leave empty for all
+  _BRANCH: 'main'                          # Repository branch being scanned
 
-      echo "===== Enriched Report ====="
-
-      cat /workspace/checkov_report.json
-
-# Step 7: Upload report to AccuKnox SaaS
-- name: 'gcr.io/cloud-builders/curl'
-  id: 'upload-to-accuknox-saas'
-  entrypoint: 'bash'
-  args:
-    - '-c'
-    - |
-      TOKEN=$$(cat /workspace/accuknox-token.txt | tr -d '\n')
-      ENDPOINT=$$(cat /workspace/accuknox-endpoint.txt | tr -d '\n')
-      LABEL=$$(cat /workspace/accuknox-label.txt | tr -d '\n')
-
-      echo "Uploading IaC report to AccuKnox SaaS..."
-
-      curl -v --location --request POST \
-      "https://$${ENDPOINT}/api/v1/artifact/?label=$${LABEL}&data_type=IAC&save_to_s3=false" \
-      --header "Authorization: Bearer $${TOKEN}" \
-      --header "Content-Type: multipart/form-data" \
-      --form "file=@/workspace/checkov_report.json"
-  waitFor:
-    - 'access-token-secret'
-    - 'access-endpoint-secret'
-    - 'access-label-secret'
-    - 'run-checkov-scan'
-    - 'enrich-report'
-
-# Step 8: Upload report to GCS
-- name: 'gcr.io/cloud-builders/gsutil'
-  id: 'upload-report-to-gcs'
-  args:
-    - 'cp'
-    - '/workspace/checkov_report.json'
-    - 'gs://artifacts.shaped-infusion-402417.appspot.com/checkov-reports/checkov_report.json'
-  waitFor:
-    - 'upload-to-accuknox-saas'
-
-timeout: '1200s'
-
-logsBucket: 'gs://artifacts.shaped-infusion-402417.appspot.com'
-
-options:
-  logging: GCS_ONLY
+timeout: '1200s'  # 20 minutes
