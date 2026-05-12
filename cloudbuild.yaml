@@ -1,20 +1,23 @@
 steps:
-  # Step 1: Build Docker image
+
+  # =========================
+  # 1. Build Docker Image
+  # =========================
   - name: 'gcr.io/cloud-builders/docker'
-    id: 'docker-build'
+    id: 'build'
     args:
       [
         'build',
         '-t',
-        '${_IMAGE_URL}:${_IMAGE_TAG}',
-        '-f',
-        '${_DOCKERFILE_CONTEXT}',
+        'us-central1-docker.pkg.dev/shaped-infusion-402417/app-repo/my-app:latest',
         '.'
       ]
 
-  # Step 2: Download AccuKnox scanner
+  # =========================
+  # 2. Install Scanner
+  # =========================
   - name: 'ubuntu'
-    id: 'download-scanner'
+    id: 'scanner-install'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -22,127 +25,82 @@ steps:
         apt-get update && apt-get install -y curl
 
         curl -L https://github.com/accuknox/aspm-scanner-cli/releases/download/v0.14.0/accuknox-aspm-scanner \
-          -o /workspace/accuknox-aspm-scanner
+          -o scanner
 
-        chmod +x /workspace/accuknox-aspm-scanner
+        chmod +x scanner
+        ./scanner tool install --type container
 
-        /workspace/accuknox-aspm-scanner tool install --type container
-
-  # Step 3: Fetch secrets from Secret Manager
+  # =========================
+  # 3. Fetch Secrets
+  # =========================
   - name: 'gcr.io/cloud-builders/gcloud'
-    id: 'fetch-secrets'
+    id: 'secrets'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        gcloud secrets versions access latest --secret=accuknox_token \
-          --format='get(payload.data)' | tr '_-' '/+' | base64 -d > /workspace/token.txt
+        gcloud secrets versions access latest --secret=accuknox_token > token.txt
+        gcloud secrets versions access latest --secret=accuknox_endpoint > endpoint.txt
+        gcloud secrets versions access latest --secret=accuknox_label > label.txt
 
-        gcloud secrets versions access latest --secret=accuknox_endpoint \
-          --format='get(payload.data)' | tr '_-' '/+' | base64 -d > /workspace/endpoint.txt
-
-        gcloud secrets versions access latest --secret=accuknox_label \
-          --format='get(payload.data)' | tr '_-' '/+' | base64 -d > /workspace/label.txt
-
-  # Step 4: Run AccuKnox scan (matches your GitHub action logic)
+  # =========================
+  # 4. Scan Image
+  # =========================
   - name: 'ubuntu'
-    id: 'accuknox-scan'
+    id: 'scan'
     entrypoint: 'bash'
-    env:
-      - 'IMAGE_NAME=${_IMAGE_URL}'
-      - 'TAG=${_IMAGE_TAG}'
-      - 'SEVERITY=${_SEVERITY}'
-      - 'SOFT_FAIL=${_SOFT_FAIL}'
-      - 'GENERATE_SBOM=${_GENERATE_SBOM}'
-      - 'PROJECT_NAME=${_PROJECT_NAME}'
     args:
       - '-c'
       - |
         set -e
 
-        chmod +x /workspace/accuknox-aspm-scanner
+        export accuknox_token=$(cat token.txt)
+        export accuknox_endpoint=$(cat endpoint.txt)
+        export accuknox_label=$(cat label.txt)
 
-        export ACCUKNOX_TOKEN=$(cat /workspace/token.txt)
-        export ACCUKNOX_ENDPOINT=$(cat /workspace/endpoint.txt)
-        export ACCUKNOX_LABEL=$(cat /workspace/label.txt)
+        IMAGE="us-central1-docker.pkg.dev/shaped-infusion-402417/app-repo/my-app:latest"
 
-        touch /workspace/results.json
-        chmod 666 /workspace/results.json
+        echo "Scanning $IMAGE"
 
-        # Normalize inputs
-        SOFT_FAIL=$(echo "$SOFT_FAIL" | tr '[:upper:]' '[:lower:]' | xargs)
-        GENERATE_SBOM=$(echo "$GENERATE_SBOM" | tr '[:upper:]' '[:lower:]' | xargs)
-
-        SOFT_FAIL_ARG=""
-        if [ "$SOFT_FAIL" = "true" ]; then
-          SOFT_FAIL_ARG="--softfail"
-        fi
-
-        CMD="image ${IMAGE_NAME}:${TAG}"
-
-        if [ -n "$SEVERITY" ]; then
-          CMD="$CMD --severity $SEVERITY"
-        fi
-
-        echo "Running AccuKnox scan: $CMD"
-
-        /workspace/accuknox-aspm-scanner scan \
-          $SOFT_FAIL_ARG \
-          --keep-results \
+        ./scanner scan \
           container \
-          --command "$CMD" \
-          --container-mode
+          --command "image $IMAGE --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL" \
+          --container-mode \
+          --keep-results
 
-        cp results.json /workspace/results-vuln.json
+        cp results.json results.json
 
-        # SBOM disabled for now (as requested)
-        if [ "$GENERATE_SBOM" = "true" ]; then
-          echo "SBOM enabled but not configured yet"
-        fi
-
-    waitFor:
-      - 'docker-build'
-      - 'download-scanner'
-      - 'fetch-secrets'
-
-  # Step 5: Upload results to GCS
-  - name: 'gcr.io/cloud-builders/gsutil'
-    id: 'upload-results'
-    args:
-      [
-        'cp',
-        '/workspace/results-vuln.json',
-        'gs://${_GCS_BUCKET}/'
-      ]
-    waitFor:
-      - 'accuknox-scan'
-
-  # Step 6: Fail build on CRITICAL
+  # =========================
+  # 5. Upload to AccuKnox SaaS
+  # =========================
   - name: 'ubuntu'
-    id: 'security-gate'
+    id: 'upload-accuknox'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        if grep -q "CRITICAL" /workspace/results-vuln.json; then
-          echo "CRITICAL vulnerabilities found - failing build"
+        set -e
+
+        echo "Uploading results to AccuKnox SaaS..."
+
+        curl --location --request POST "$(/bin/cat endpoint.txt)/api/v1/artifact/" \
+          --header "Authorization: Bearer $(cat token.txt)" \
+          --header "Label: $(cat label.txt)" \
+          --form "file=@results.json"
+
+  # =========================
+  # 6. Fail on CRITICAL
+  # =========================
+  - name: 'ubuntu'
+    id: 'gate'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if grep -q "CRITICAL" results.json; then
+          echo "❌ CRITICAL vulnerabilities found - blocking build"
           exit 1
         fi
-
-    waitFor:
-      - 'accuknox-scan'
-
-substitutions:
-  _IMAGE_URL: 'nginx'
-  _IMAGE_TAG: 'latest'
-  _DOCKERFILE_CONTEXT: 'Dockerfile'
-
-  _SEVERITY: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
-  _SOFT_FAIL: 'false'
-  _GENERATE_SBOM: 'false'
-  _PROJECT_NAME: ''
-
-  _GCS_BUCKET: 'artifacts.shaped-infusion-402417.appspot.com'
 
 options:
   logging: CLOUD_LOGGING_ONLY
