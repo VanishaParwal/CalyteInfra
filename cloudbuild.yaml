@@ -1,91 +1,124 @@
 steps:
 
-# Step 1: Scan the container image with AccuKnox
-- name: 'accuknox/accuknox-container-scan'
-  id: 'accuknox-container-scan'
-  args:
-    - 'image'
-    - '--format'
-    - 'json'
-    - '--output'
-    - '/workspace/accuknox-report.json'
-    - '${_IMAGE_URL}:${_IMAGE_TAG}'
-
-# Step 2: Upload report to GCS
-- name: 'gcr.io/cloud-builders/gsutil'
-  id: 'upload-report-to-gcs'
-  args:
-    - 'cp'
-    - '/workspace/accuknox-report.json'
-    - 'gs://artifacts.shaped-infusion-402417.appspot.com/security-reports/accuknox-report.json'
-  waitFor:
-    - 'accuknox-container-scan'
-
-# Step 3: Print report
-- name: 'ubuntu'
-  id: 'print-report'
+# Step 1: Clone GitHub Repository
+- name: 'gcr.io/cloud-builders/git'
+  id: 'clone-repository'
   entrypoint: 'bash'
   args:
     - '-c'
     - |
-      cat /workspace/accuknox-report.json
-  waitFor:
-    - 'accuknox-container-scan'
+      git clone https://github.com/VanishaParwal/CalyteInfra.git /workspace/AccuKnox_Iac
 
-# Step 4: Read AccuKnox token secret
+# Step 2: Run Checkov IaC Scan
+- name: 'python:3.11'
+  id: 'run-checkov-scan'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      pip install checkov
+
+      checkov -d /workspace/AccuKnox_Iac \
+      --output json > /workspace/checkov_report.json || true
+
+      echo "===== Checkov Report Generated ====="
+
+      ls -lah /workspace/
+
+# Step 3: Read AccuKnox Token Secret
 - name: 'gcr.io/cloud-builders/gcloud'
-  id: 'access-secret'
+  id: 'access-token-secret'
   entrypoint: 'bash'
   args:
     - '-c'
     - |
       gcloud secrets versions access latest \
       --secret=accuknox_token \
-      --format='get(payload.data)' | tr '_-' '/+' | base64 -d > /workspace/decrypted-data.txt
+      > /workspace/accuknox-token.txt
 
-# Step 5: Upload report to AccuKnox SaaS
-- name: 'gcr.io/cloud-builders/curl'
-  id: 'forward-result-to-accuknox-saas'
+# Step 4: Read AccuKnox Endpoint Secret
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: 'access-endpoint-secret'
   entrypoint: 'bash'
   args:
     - '-c'
     - |
-      TOKEN=$$(cat /workspace/decrypted-data.txt)
+      gcloud secrets versions access latest \
+      --secret=accuknox_endpoint \
+      > /workspace/accuknox-endpoint.txt
 
-      echo "Uploading report to AccuKnox SaaS..."
+# Step 5: Read AccuKnox Label Secret
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: 'access-label-secret'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      gcloud secrets versions access latest \
+      --secret=accuknox_label \
+      > /workspace/accuknox-label.txt
+
+# Step 6: Enrich Report
+- name: 'ubuntu'
+  id: 'enrich-report'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      apt-get update
+
+      apt-get install -y jq
+
+      jq --arg repoLink "https://github.com/VanishaParwal/CalyteInfra.git" \
+         --arg branch "main" \
+         '. += [{"details": {"repo": $repoLink, "branch": $branch}}]' \
+         /workspace/checkov_report.json \
+         > /workspace/tmp.json
+
+      mv /workspace/tmp.json /workspace/checkov_report.json
+
+      echo "===== Enriched Report ====="
+
+      cat /workspace/checkov_report.json
+
+# Step 7: Upload report to AccuKnox SaaS
+- name: 'gcr.io/cloud-builders/curl'
+  id: 'upload-to-accuknox-saas'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      TOKEN=$$(cat /workspace/accuknox-token.txt | tr -d '\n')
+      ENDPOINT=$$(cat /workspace/accuknox-endpoint.txt | tr -d '\n')
+      LABEL=$$(cat /workspace/accuknox-label.txt | tr -d '\n')
+
+      echo "Uploading IaC report to AccuKnox SaaS..."
 
       curl -v --location --request POST \
-      "https://${_CSPM_URL}/api/v1/artifact/?label=${_LABEL}&data_type=TR&save_to_s3=false" \
+      "https://$${ENDPOINT}/api/v1/artifact/?label=$${LABEL}&data_type=IAC&save_to_s3=false" \
       --header "Authorization: Bearer $${TOKEN}" \
       --header "Content-Type: multipart/form-data" \
-      --form "file=@/workspace/accuknox-report.json"
+      --form "file=@/workspace/checkov_report.json"
   waitFor:
-    - 'access-secret'
-    - 'accuknox-container-scan'
+    - 'access-token-secret'
+    - 'access-endpoint-secret'
+    - 'access-label-secret'
+    - 'run-checkov-scan'
+    - 'enrich-report'
 
-# Step 6: Fail if CRITICAL vulnerabilities exist
-- name: 'ubuntu'
-  id: 'policy-check'
-  entrypoint: 'bash'
+# Step 8: Upload report to GCS
+- name: 'gcr.io/cloud-builders/gsutil'
+  id: 'upload-report-to-gcs'
   args:
-    - '-c'
-    - |
-      if grep -q "CRITICAL" /workspace/accuknox-report.json; then
-        echo "CRITICAL vulnerabilities detected."
-        exit 1
-      else
-        echo "No CRITICAL vulnerabilities detected."
-      fi
+    - 'cp'
+    - '/workspace/checkov_report.json'
+    - 'gs://artifacts.shaped-infusion-402417.appspot.com/checkov-reports/checkov_report.json'
   waitFor:
-    - 'forward-result-to-accuknox-saas'
+    - 'upload-to-accuknox-saas'
 
-substitutions:
-  _IMAGE_URL: 'nginx'
-  _IMAGE_TAG: 'latest'
+timeout: '1200s'
 
-  _CSPM_URL: 'cspm.demo.accuknox.com'
-
-  _LABEL: 'gcb-container-scan'
+logsBucket: 'gs://artifacts.shaped-infusion-402417.appspot.com'
 
 options:
-  logging: CLOUD_LOGGING_ONLY
+  logging: GCS_ONLY
