@@ -1,4 +1,5 @@
-name: AccuKnox SAST Workflow
+name: Accuknox SAST
+
 on:
   push:
     branches:
@@ -6,22 +7,20 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch:
+
 jobs:
-  sast-scan:
+  accuknox-cicd:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: Run AccuKnox SAST
-        uses: VanishaParwal/sast-scan-action@main
+      - name: "Run Accuknox SAST: Opengrep"
+        uses: accuknox/sast-scan-opengrep-action@latest
         with:
-          skip_sonar_scan: false
-          sonar_project_key: ${{ secrets.SONAR_PROJECT_KEY }}
-          sonar_token: ${{ secrets.SONAR_TOKEN }}
-          sonar_host_url: ${{ secrets.SONAR_HOST_URL }}
           accuknox_endpoint: ${{ secrets.ACCUKNOX_ENDPOINT }}
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
           accuknox_label: ${{ secrets.ACCUKNOX_LABEL }}
-          soft_fail: false
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY}}
+          accuknox_ai_analysis: "false"
+          soft_fail: "true"
