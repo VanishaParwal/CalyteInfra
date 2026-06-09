@@ -23,4 +23,5 @@ jobs:
           accuknox_label: ${{ secrets.ACCUKNOX_LABEL }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY}}
           accuknox_ai_analysis: "false"
+          severity : "High"
           soft_fail: "true"
