@@ -24,7 +24,7 @@ jobs:
           output_format: json                       # Optional: Format of output
           output_file_path: "./results.json"        # Optional: Output file path
           soft_fail: false
-          severity: "HIGH,CRITICAL" # Optional: Will continue after found vulnerability 
+          severity: "low" # Optional: Will continue after found vulnerability 
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
           accuknox_endpoint: ${{ secrets.ACCUKNOX_ENDPOINT }}
           accuknox_label: ${{ secrets.ACCUKNOX_LABEL }} # Optional: Will continue after found vulnerability 
