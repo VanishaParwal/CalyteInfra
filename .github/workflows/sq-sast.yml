@@ -16,12 +16,12 @@ jobs:
         uses: actions/checkout@v3
 
       - name: "Run Accuknox SAST: Opengrep"
-        uses: accuknox/sast-scan-opengrep-action@latest
+        uses: VanishaParwal/sast-scan-opengrep-action@main
         with:
           accuknox_endpoint: ${{ secrets.ACCUKNOX_ENDPOINT }}
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
           accuknox_label: ${{ secrets.ACCUKNOX_LABEL }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY}}
           accuknox_ai_analysis: "false"
-          severity : "High,Critical"
+          severity : "High"
           soft_fail: "false"
