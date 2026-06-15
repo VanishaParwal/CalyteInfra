@@ -1,0 +1,17 @@
+name: AccuKnox Security
+on: [push]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: AccuKnox Scan
+        uses: VanishaParwal/scan-action@master
+        with:
+          scan_type: "sast,iac,secret,sbom"
+          accuknox_endpoint: ${{ secrets.ACCUKNOX_ENDPOINT }}
+          accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
+          accuknox_label: ${{ secrets.ACCUKNOX_LABEL }}
+          sbom_project_name: "v-test"
