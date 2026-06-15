@@ -7,7 +7,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: docker build -t CalyteInfra:${{ github.sha }} .
+        run: docker build -t calyteinfra:${{ github.sha }} .
       - name: AccuKnox Scan
         uses: VanishaParwal/scan-action@master
         with:
@@ -15,7 +15,7 @@ jobs:
           accuknox_endpoint: ${{ secrets.ACCUKNOX_ENDPOINT }}
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
           accuknox_label: ${{ secrets.ACCUKNOX_LABEL }}
-          container_image_ref: "CalyteInfra:${{ github.sha }}"
+          container_image_ref: "calyteinfra:${{ github.sha }}"
           dast_target_url: "https://juice-shop.herokuapp.com"   # CHANGE ME
           dast_scan_type: "baseline"        # or "full-scan"
           dast_severity_threshold: "HIGH"
