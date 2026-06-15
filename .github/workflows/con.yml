@@ -6,12 +6,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+      - name: Build image
+        run: docker build -t CalyteInfra:${{ github.sha }} .
       - name: AccuKnox Scan
         uses: VanishaParwal/scan-action@master
         with:
-          scan_type: "sast,iac,secret,sbom"
+          scan_type: "sq-sast,iac,secret,sbom,dast"
           accuknox_endpoint: ${{ secrets.ACCUKNOX_ENDPOINT }}
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
           accuknox_label: ${{ secrets.ACCUKNOX_LABEL }}
+          container_image_ref: "CalyteInfra:${{ github.sha }}"
+          dast_target_url: "https://juice-shop.herokuapp.com"   # CHANGE ME
+          dast_scan_type: "baseline"        # or "full-scan"
+          dast_severity_threshold: "HIGH"
+          sonar_project_key: "Calyte"
+          sonar_token: "squ_7bb50cc55e21ee98a58910a6770bbfb162229633"
+          sonar_host_url: "https://sq.accuknox.com"
           sbom_project_name: "v-test"
