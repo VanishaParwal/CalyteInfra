@@ -22,6 +22,5 @@ jobs:
           accuknox_token: ${{ secrets.ACCUKNOX_TOKEN }}
           accuknox_label: ${{ secrets.ACCUKNOX_LABEL }}
           anthropic_api_key: "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"
-          accuknox_ai_analysis: "false"
-          severity : "High"
+          accuknox_ai_analysis: "true"
           soft_fail: "false"
